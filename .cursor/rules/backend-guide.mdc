@@ -1,0 +1,1166 @@
+
+# Backend Structure & API Specifications
+
+## Introduction
+This document outlines the backend architecture, API design, and implementation guidelines for the tweet inspiration tool. The backend is designed as a serverless architecture using Vercel Functions, with Supabase providing database and authentication services. This approach ensures scalability, cost-effectiveness, and seamless integration with the Next.js frontend.
+
+
+## Architecture Overview
+
+### Serverless Architecture
+The backend leverages Vercel's serverless functions to provide a scalable and cost-effective solution that automatically scales based on demand. Each API endpoint is implemented as a separate serverless function, allowing for independent deployment, scaling, and monitoring. This architecture eliminates the need for server management while providing excellent performance and reliability.
+
+The serverless approach offers several advantages for this application. First, it provides automatic scaling that can handle varying loads without manual intervention, ensuring the application remains responsive during peak usage periods. Second, the pay-per-execution model makes it cost-effective for applications with variable traffic patterns. Third, the global edge network provided by Vercel ensures low latency for users worldwide.
+
+### Database Architecture
+Supabase PostgreSQL serves as the primary database, providing ACID compliance, complex queries, and real-time capabilities. The database schema is designed to support user management, tweet data caching, AI enhancement history, and application analytics. Supabase's built-in Row Level Security (RLS) ensures data privacy and security at the database level.
+
+The database design follows normalization principles while maintaining performance through strategic denormalization where appropriate. Indexes are carefully planned to optimize query performance for common operations such as user authentication, tweet retrieval, and AI enhancement history lookup.
+
+### Authentication and Authorization
+Supabase Auth handles all authentication and authorization concerns, providing secure user registration, login, password reset, and session management. JSON Web Tokens (JWT) are used for stateless authentication, with automatic token refresh handled by the Supabase client library.
+
+The authentication system supports multiple authentication methods including email/password authentication and social login providers. Role-based access control is implemented through Supabase's user metadata and RLS policies, ensuring users can only access their own data and authorized resources.
+
+### External Service Integration
+The backend integrates with multiple external services to provide core functionality. Grok AI or similar services provide access to real-time tweet data based on user-selected topics. OpenAI's API powers the AI enhancement features, providing natural language processing capabilities for tweet expansion, improvement, and modification.
+
+These integrations are implemented with proper error handling, rate limiting, and fallback mechanisms to ensure reliability and prevent service disruptions. API keys and sensitive configuration are managed through environment variables and Vercel's secure environment variable system.
+
+
+## API Design Principles
+
+### RESTful Design
+The API follows RESTful design principles with clear resource-based URLs, appropriate HTTP methods, and consistent response formats. Each endpoint represents a specific resource or action, with intuitive naming conventions that make the API self-documenting and easy to understand.
+
+Resource URLs follow a hierarchical structure that reflects the relationship between different entities. For example, user-specific resources are nested under the user path, while global resources like tweet inspiration feeds are available at the root level. HTTP status codes are used appropriately to indicate the success or failure of operations, with detailed error messages provided in the response body.
+
+### Request and Response Format
+All API requests and responses use JSON format with consistent structure and naming conventions. Request bodies are validated using schema validation to ensure data integrity and provide clear error messages for invalid input. Response objects include metadata such as pagination information, request timestamps, and API version information where appropriate.
+
+Error responses follow a standardized format that includes error codes, human-readable messages, and additional context where helpful. This consistency makes it easier for frontend developers to handle errors appropriately and provide meaningful feedback to users.
+
+### Authentication and Security
+All API endpoints require authentication except for public endpoints like health checks and documentation. Authentication is handled through Bearer tokens provided by Supabase Auth, with automatic token validation and user context injection into request handlers.
+
+Security measures include input validation, SQL injection prevention through parameterized queries, rate limiting to prevent abuse, and CORS configuration to control cross-origin access. Sensitive data is never logged, and all external API calls include proper timeout and retry mechanisms.
+
+### Versioning Strategy
+API versioning is implemented through URL path versioning (e.g., /api/v1/tweets) to ensure backward compatibility as the API evolves. Version deprecation follows a clear timeline with advance notice to API consumers, and multiple versions can be supported simultaneously during transition periods.
+
+The versioning strategy allows for iterative improvements and new feature additions without breaking existing integrations. Each version maintains its own documentation and test suite to ensure reliability and consistency.
+
+
+## API Endpoints Specification
+
+### Authentication Endpoints
+
+#### POST /api/auth/signup
+Creates a new user account with email and password authentication.
+
+**Request Body:**
+```json
+{
+  "email": "user@example.com",
+  "password": "securePassword123",
+  "firstName": "John",
+  "lastName": "Doe"
+}
+```
+
+**Response (201 Created):**
+```json
+{
+  "user": {
+    "id": "uuid",
+    "email": "user@example.com",
+    "firstName": "John",
+    "lastName": "Doe",
+    "createdAt": "2024-01-01T00:00:00Z"
+  },
+  "session": {
+    "accessToken": "jwt_token",
+    "refreshToken": "refresh_token",
+    "expiresAt": "2024-01-01T01:00:00Z"
+  }
+}
+```
+
+#### POST /api/auth/login
+Authenticates an existing user and returns session tokens.
+
+**Request Body:**
+```json
+{
+  "email": "user@example.com",
+  "password": "securePassword123"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "user": {
+    "id": "uuid",
+    "email": "user@example.com",
+    "firstName": "John",
+    "lastName": "Doe"
+  },
+  "session": {
+    "accessToken": "jwt_token",
+    "refreshToken": "refresh_token",
+    "expiresAt": "2024-01-01T01:00:00Z"
+  }
+}
+```
+
+#### POST /api/auth/logout
+Invalidates the current user session.
+
+**Headers:**
+```
+Authorization: Bearer jwt_token
+```
+
+**Response (200 OK):**
+```json
+{
+  "message": "Successfully logged out"
+}
+```
+
+### Tweet Inspiration Endpoints
+
+#### GET /api/tweets/inspiration
+Retrieves tweet inspiration based on selected topics and user preferences.
+
+**Headers:**
+```
+Authorization: Bearer jwt_token
+```
+
+**Query Parameters:**
+- `topic` (required): The topic to search for (e.g., "AI Agent", "Marketing")
+- `limit` (optional): Number of tweets to return (default: 20, max: 50)
+- `offset` (optional): Pagination offset (default: 0)
+
+**Response (200 OK):**
+```json
+{
+  "tweets": [
+    {
+      "id": "tweet_id",
+      "content": "Tweet content here...",
+      "author": {
+        "username": "author_username",
+        "displayName": "Author Name",
+        "profileImage": "https://example.com/avatar.jpg"
+      },
+      "metrics": {
+        "likes": 1250,
+        "reposts": 340,
+        "comments": 89,
+        "impressions": 15000
+      },
+      "createdAt": "2024-01-01T12:00:00Z",
+      "url": "https://twitter.com/user/status/123456789"
+    }
+  ],
+  "pagination": {
+    "total": 1000,
+    "limit": 20,
+    "offset": 0,
+    "hasMore": true
+  }
+}
+```
+
+#### POST /api/tweets/refresh
+Refreshes the tweet inspiration feed with new content.
+
+**Headers:**
+```
+Authorization: Bearer jwt_token
+```
+
+**Request Body:**
+```json
+{
+  "topic": "AI Agent"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "message": "Feed refreshed successfully",
+  "newTweetsCount": 15
+}
+```
+
+### AI Enhancement Endpoints
+
+#### POST /api/ai/expand-tweet
+Expands a tweet using AI to create a longer, more detailed version.
+
+**Headers:**
+```
+Authorization: Bearer jwt_token
+```
+
+**Request Body:**
+```json
+{
+  "content": "Original tweet content",
+  "style": "professional", // optional: casual, professional, creative
+  "maxLength": 280 // optional: maximum character count
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "originalContent": "Original tweet content",
+  "enhancedContent": "Expanded tweet content with more details and context...",
+  "metadata": {
+    "enhancementType": "expand",
+    "processingTime": 1.2,
+    "characterCount": 245
+  }
+}
+```
+
+#### POST /api/ai/improve-tweet
+Improves tweet quality, engagement, and readability.
+
+**Headers:**
+```
+Authorization: Bearer jwt_token
+```
+
+**Request Body:**
+```json
+{
+  "content": "Original tweet content",
+  "improvements": ["grammar", "engagement", "clarity"], // optional
+  "tone": "professional" // optional: casual, professional, friendly
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "originalContent": "Original tweet content",
+  "enhancedContent": "Improved tweet with better grammar and engagement...",
+  "improvements": [
+    {
+      "type": "grammar",
+      "description": "Fixed grammatical errors"
+    },
+    {
+      "type": "engagement",
+      "description": "Added engaging elements"
+    }
+  ],
+  "metadata": {
+    "enhancementType": "improve",
+    "processingTime": 0.8,
+    "characterCount": 198
+  }
+}
+```
+
+#### POST /api/ai/make-shorter
+Condenses tweet content while preserving key message and impact.
+
+**Headers:**
+```
+Authorization: Bearer jwt_token
+```
+
+**Request Body:**
+```json
+{
+  "content": "Long tweet content that needs to be shortened...",
+  "targetLength": 140 // optional: target character count
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "originalContent": "Long tweet content that needs to be shortened...",
+  "enhancedContent": "Concise version of the tweet",
+  "metadata": {
+    "enhancementType": "shorten",
+    "originalLength": 280,
+    "newLength": 125,
+    "processingTime": 0.6
+  }
+}
+```
+
+
+#### POST /api/ai/add-emojis
+Adds relevant emojis to tweet content to increase engagement and visual appeal.
+
+**Headers:**
+```
+Authorization: Bearer jwt_token
+```
+
+**Request Body:**
+```json
+{
+  "content": "Tweet content without emojis",
+  "emojiStyle": "subtle" // optional: subtle, moderate, expressive
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "originalContent": "Tweet content without emojis",
+  "enhancedContent": "Tweet content with relevant emojis 🚀✨",
+  "addedEmojis": ["🚀", "✨"],
+  "metadata": {
+    "enhancementType": "add_emojis",
+    "processingTime": 0.4
+  }
+}
+```
+
+#### POST /api/ai/fix-grammar
+Corrects grammatical errors and improves sentence structure.
+
+**Headers:**
+```
+Authorization: Bearer jwt_token
+```
+
+**Request Body:**
+```json
+{
+  "content": "Tweet with grammer mistakes and poor structure"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "originalContent": "Tweet with grammer mistakes and poor structure",
+  "enhancedContent": "Tweet with grammar corrections and improved structure",
+  "corrections": [
+    {
+      "type": "spelling",
+      "original": "grammer",
+      "corrected": "grammar"
+    },
+    {
+      "type": "structure",
+      "description": "Improved sentence flow"
+    }
+  ],
+  "metadata": {
+    "enhancementType": "fix_grammar",
+    "processingTime": 0.5
+  }
+}
+```
+
+#### POST /api/ai/create-hook
+Creates an engaging opening hook to capture audience attention.
+
+**Headers:**
+```
+Authorization: Bearer jwt_token
+```
+
+**Request Body:**
+```json
+{
+  "content": "Main tweet content",
+  "hookStyle": "question" // optional: question, statistic, story, controversial
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "originalContent": "Main tweet content",
+  "enhancedContent": "🤔 Ever wondered why... [original content]",
+  "hookType": "question",
+  "metadata": {
+    "enhancementType": "create_hook",
+    "processingTime": 0.7
+  }
+}
+```
+
+#### POST /api/ai/create-cta
+Adds a compelling call-to-action to encourage user engagement.
+
+**Headers:**
+```
+Authorization: Bearer jwt_token
+```
+
+**Request Body:**
+```json
+{
+  "content": "Tweet content without CTA",
+  "ctaType": "engagement" // optional: engagement, follow, share, comment
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "originalContent": "Tweet content without CTA",
+  "enhancedContent": "Tweet content without CTA\n\nWhat's your take on this? 👇",
+  "ctaType": "engagement",
+  "metadata": {
+    "enhancementType": "create_cta",
+    "processingTime": 0.6
+  }
+}
+```
+
+### User Management Endpoints
+
+#### GET /api/user/profile
+Retrieves the current user's profile information.
+
+**Headers:**
+```
+Authorization: Bearer jwt_token
+```
+
+**Response (200 OK):**
+```json
+{
+  "user": {
+    "id": "uuid",
+    "email": "user@example.com",
+    "firstName": "John",
+    "lastName": "Doe",
+    "preferences": {
+      "selectedTopics": ["AI Agent", "Marketing", "Productivity"],
+      "defaultTone": "professional",
+      "autoSave": true
+    },
+    "usage": {
+      "aiEnhancementsUsed": 150,
+      "tweetsGenerated": 45,
+      "lastActive": "2024-01-01T12:00:00Z"
+    }
+  }
+}
+```
+
+#### PUT /api/user/profile
+Updates the current user's profile information.
+
+**Headers:**
+```
+Authorization: Bearer jwt_token
+```
+
+**Request Body:**
+```json
+{
+  "firstName": "John",
+  "lastName": "Doe",
+  "preferences": {
+    "selectedTopics": ["AI Agent", "Marketing"],
+    "defaultTone": "casual"
+  }
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "user": {
+    "id": "uuid",
+    "email": "user@example.com",
+    "firstName": "John",
+    "lastName": "Doe",
+    "preferences": {
+      "selectedTopics": ["AI Agent", "Marketing"],
+      "defaultTone": "casual",
+      "autoSave": true
+    }
+  },
+  "message": "Profile updated successfully"
+}
+```
+
+#### GET /api/user/topics
+Retrieves available topics for tweet inspiration.
+
+**Headers:**
+```
+Authorization: Bearer jwt_token
+```
+
+**Response (200 OK):**
+```json
+{
+  "topics": [
+    {
+      "id": "ai-agent",
+      "name": "AI Agent",
+      "description": "Artificial intelligence and autonomous agents",
+      "tweetCount": 15420,
+      "trending": true
+    },
+    {
+      "id": "marketing",
+      "name": "Marketing",
+      "description": "Digital marketing strategies and trends",
+      "tweetCount": 28350,
+      "trending": false
+    }
+  ],
+  "userSelectedTopics": ["ai-agent", "marketing"]
+}
+```
+
+
+## Database Schema
+
+### Users Table
+The users table extends Supabase's built-in auth.users table with additional application-specific fields.
+
+```sql
+CREATE TABLE public.users (
+  id UUID REFERENCES auth.users(id) PRIMARY KEY,
+  first_name VARCHAR(50),
+  last_name VARCHAR(50),
+  preferences JSONB DEFAULT '{}',
+  usage_stats JSONB DEFAULT '{}',
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Row Level Security
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view own profile" ON public.users
+  FOR SELECT USING (auth.uid() = id);
+
+CREATE POLICY "Users can update own profile" ON public.users
+  FOR UPDATE USING (auth.uid() = id);
+```
+
+### Topics Table
+Stores available topics for tweet inspiration with metadata and statistics.
+
+```sql
+CREATE TABLE public.topics (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  slug VARCHAR(100) UNIQUE NOT NULL,
+  name VARCHAR(100) NOT NULL,
+  description TEXT,
+  tweet_count INTEGER DEFAULT 0,
+  is_trending BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Indexes
+CREATE INDEX idx_topics_slug ON public.topics(slug);
+CREATE INDEX idx_topics_trending ON public.topics(is_trending);
+```
+
+### User Topics Table
+Junction table for user-selected topics with many-to-many relationship.
+
+```sql
+CREATE TABLE public.user_topics (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
+  topic_id UUID REFERENCES public.topics(id) ON DELETE CASCADE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  UNIQUE(user_id, topic_id)
+);
+
+-- Row Level Security
+ALTER TABLE public.user_topics ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can manage own topics" ON public.user_topics
+  FOR ALL USING (auth.uid() = user_id);
+
+-- Indexes
+CREATE INDEX idx_user_topics_user_id ON public.user_topics(user_id);
+CREATE INDEX idx_user_topics_topic_id ON public.user_topics(topic_id);
+```
+
+### Tweet Cache Table
+Caches tweet data from external APIs to improve performance and reduce API calls.
+
+```sql
+CREATE TABLE public.tweet_cache (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  external_id VARCHAR(100) UNIQUE NOT NULL,
+  content TEXT NOT NULL,
+  author_data JSONB NOT NULL,
+  metrics JSONB NOT NULL,
+  topic_id UUID REFERENCES public.topics(id),
+  source_url VARCHAR(500),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  expires_at TIMESTAMP WITH TIME ZONE DEFAULT (NOW() + INTERVAL '24 hours')
+);
+
+-- Indexes
+CREATE INDEX idx_tweet_cache_external_id ON public.tweet_cache(external_id);
+CREATE INDEX idx_tweet_cache_topic_id ON public.tweet_cache(topic_id);
+CREATE INDEX idx_tweet_cache_expires_at ON public.tweet_cache(expires_at);
+
+-- Automatic cleanup of expired tweets
+CREATE OR REPLACE FUNCTION cleanup_expired_tweets()
+RETURNS void AS $$
+BEGIN
+  DELETE FROM public.tweet_cache WHERE expires_at < NOW();
+END;
+$$ LANGUAGE plpgsql;
+```
+
+### AI Enhancement History Table
+Tracks AI enhancement operations for analytics and user history.
+
+```sql
+CREATE TABLE public.ai_enhancements (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
+  enhancement_type VARCHAR(50) NOT NULL,
+  original_content TEXT NOT NULL,
+  enhanced_content TEXT NOT NULL,
+  metadata JSONB DEFAULT '{}',
+  processing_time DECIMAL(5,3),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Row Level Security
+ALTER TABLE public.ai_enhancements ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view own enhancements" ON public.ai_enhancements
+  FOR SELECT USING (auth.uid() = user_id);
+
+-- Indexes
+CREATE INDEX idx_ai_enhancements_user_id ON public.ai_enhancements(user_id);
+CREATE INDEX idx_ai_enhancements_type ON public.ai_enhancements(enhancement_type);
+CREATE INDEX idx_ai_enhancements_created_at ON public.ai_enhancements(created_at);
+```
+
+### Drafts Table
+Stores user draft tweets for later editing and publishing.
+
+```sql
+CREATE TABLE public.drafts (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
+  title VARCHAR(100),
+  content TEXT NOT NULL,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Row Level Security
+ALTER TABLE public.drafts ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can manage own drafts" ON public.drafts
+  FOR ALL USING (auth.uid() = user_id);
+
+-- Indexes
+CREATE INDEX idx_drafts_user_id ON public.drafts(user_id);
+CREATE INDEX idx_drafts_updated_at ON public.drafts(updated_at);
+```
+
+
+## Implementation Guidelines
+
+### Serverless Function Structure
+Each API endpoint is implemented as a separate serverless function following a consistent structure that promotes maintainability and testability. Functions are organized by feature domain, with shared utilities and middleware extracted into reusable modules.
+
+```typescript
+// /api/tweets/inspiration.ts
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
+import { authenticateUser } from '@/lib/auth';
+import { fetchTweetsFromGrok } from '@/lib/external-apis';
+import { validateRequest } from '@/lib/validation';
+
+export async function GET(request: NextRequest) {
+  try {
+    // Authentication
+    const user = await authenticateUser(request);
+    if (!user) {
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
+    // Request validation
+    const { topic, limit, offset } = validateRequest(request.nextUrl.searchParams);
+
+    // Business logic
+    const tweets = await fetchTweetsFromGrok(topic, { limit, offset });
+    
+    // Cache results
+    await cacheTweets(tweets, topic);
+
+    // Response
+    return NextResponse.json({
+      tweets,
+      pagination: {
+        total: tweets.length,
+        limit,
+        offset,
+        hasMore: tweets.length === limit
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching tweets:', error);
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    );
+  }
+}
+```
+
+### Error Handling Strategy
+Comprehensive error handling ensures graceful degradation and meaningful error messages for both developers and end users. Errors are categorized by type and severity, with appropriate logging and monitoring for production environments.
+
+```typescript
+// /lib/error-handler.ts
+export class APIError extends Error {
+  constructor(
+    message: string,
+    public statusCode: number = 500,
+    public code: string = 'INTERNAL_ERROR'
+  ) {
+    super(message);
+    this.name = 'APIError';
+  }
+}
+
+export function handleAPIError(error: unknown): NextResponse {
+  if (error instanceof APIError) {
+    return NextResponse.json(
+      {
+        error: error.message,
+        code: error.code
+      },
+      { status: error.statusCode }
+    );
+  }
+
+  // Log unexpected errors
+  console.error('Unexpected error:', error);
+  
+  return NextResponse.json(
+    {
+      error: 'An unexpected error occurred',
+      code: 'INTERNAL_ERROR'
+    },
+    { status: 500 }
+  );
+}
+```
+
+### Rate Limiting and Security
+Rate limiting prevents abuse and ensures fair usage across all users. Implementation uses a combination of IP-based and user-based rate limiting with different limits for authenticated and anonymous users.
+
+```typescript
+// /lib/rate-limiter.ts
+import { Redis } from '@upstash/redis';
+
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL!,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+});
+
+export async function checkRateLimit(
+  identifier: string,
+  limit: number = 100,
+  window: number = 3600 // 1 hour
+): Promise<{ allowed: boolean; remaining: number; resetTime: number }> {
+  const key = `rate_limit:${identifier}`;
+  const now = Date.now();
+  const windowStart = now - (window * 1000);
+
+  // Remove old entries
+  await redis.zremrangebyscore(key, 0, windowStart);
+
+  // Count current requests
+  const current = await redis.zcard(key);
+
+  if (current >= limit) {
+    const oldestRequest = await redis.zrange(key, 0, 0, { withScores: true });
+    const resetTime = oldestRequest[0] ? oldestRequest[1] + (window * 1000) : now + (window * 1000);
+    
+    return {
+      allowed: false,
+      remaining: 0,
+      resetTime: Math.ceil(resetTime / 1000)
+    };
+  }
+
+  // Add current request
+  await redis.zadd(key, { score: now, member: `${now}-${Math.random()}` });
+  await redis.expire(key, window);
+
+  return {
+    allowed: true,
+    remaining: limit - current - 1,
+    resetTime: Math.ceil((now + (window * 1000)) / 1000)
+  };
+}
+```
+
+### External API Integration
+Integration with external services like Grok AI and OpenAI follows best practices for reliability, error handling, and performance. Retry mechanisms, circuit breakers, and fallback strategies ensure service resilience.
+
+```typescript
+// /lib/external-apis/grok.ts
+import { APIError } from '@/lib/error-handler';
+
+interface GrokTweet {
+  id: string;
+  content: string;
+  author: {
+    username: string;
+    displayName: string;
+    profileImage: string;
+  };
+  metrics: {
+    likes: number;
+    reposts: number;
+    comments: number;
+    impressions: number;
+  };
+  createdAt: string;
+  url: string;
+}
+
+export async function fetchTweetsFromGrok(
+  topic: string,
+  options: { limit?: number; offset?: number } = {}
+): Promise<GrokTweet[]> {
+  const { limit = 20, offset = 0 } = options;
+
+  try {
+    const response = await fetch('https://api.grok.ai/v1/tweets/search', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.GROK_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        query: topic,
+        limit,
+        offset,
+        include_metrics: true
+      }),
+    });
+
+    if (!response.ok) {
+      throw new APIError(
+        `Grok API error: ${response.statusText}`,
+        response.status,
+        'GROK_API_ERROR'
+      );
+    }
+
+    const data = await response.json();
+    return data.tweets.map(transformGrokTweet);
+
+  } catch (error) {
+    if (error instanceof APIError) throw error;
+    
+    throw new APIError(
+      'Failed to fetch tweets from Grok API',
+      500,
+      'GROK_API_UNAVAILABLE'
+    );
+  }
+}
+
+function transformGrokTweet(grokTweet: any): GrokTweet {
+  return {
+    id: grokTweet.id,
+    content: grokTweet.text,
+    author: {
+      username: grokTweet.user.screen_name,
+      displayName: grokTweet.user.name,
+      profileImage: grokTweet.user.profile_image_url
+    },
+    metrics: {
+      likes: grokTweet.favorite_count,
+      reposts: grokTweet.retweet_count,
+      comments: grokTweet.reply_count,
+      impressions: grokTweet.impression_count || 0
+    },
+    createdAt: grokTweet.created_at,
+    url: `https://twitter.com/${grokTweet.user.screen_name}/status/${grokTweet.id}`
+  };
+}
+```
+
+### Monitoring and Logging
+Comprehensive monitoring and logging provide visibility into application performance, errors, and usage patterns. Structured logging with correlation IDs enables effective debugging and performance analysis.
+
+```typescript
+// /lib/logger.ts
+import { v4 as uuidv4 } from 'uuid';
+
+interface LogContext {
+  correlationId?: string;
+  userId?: string;
+  endpoint?: string;
+  [key: string]: any;
+}
+
+export class Logger {
+  private context: LogContext;
+
+  constructor(context: LogContext = {}) {
+    this.context = {
+      correlationId: uuidv4(),
+      ...context
+    };
+  }
+
+  info(message: string, data?: any) {
+    console.log(JSON.stringify({
+      level: 'info',
+      message,
+      data,
+      ...this.context,
+      timestamp: new Date().toISOString()
+    }));
+  }
+
+  error(message: string, error?: any, data?: any) {
+    console.error(JSON.stringify({
+      level: 'error',
+      message,
+      error: error?.message || error,
+      stack: error?.stack,
+      data,
+      ...this.context,
+      timestamp: new Date().toISOString()
+    }));
+  }
+
+  warn(message: string, data?: any) {
+    console.warn(JSON.stringify({
+      level: 'warn',
+      message,
+      data,
+      ...this.context,
+      timestamp: new Date().toISOString()
+    }));
+  }
+}
+```
+
+
+## Deployment and Testing
+
+### Environment Configuration
+Environment-specific configuration is managed through Vercel's environment variable system, with separate configurations for development, staging, and production environments. Sensitive values like API keys and database credentials are stored securely and never committed to version control.
+
+```typescript
+// /lib/config.ts
+export const config = {
+  supabase: {
+    url: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    anonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    serviceKey: process.env.SUPABASE_SERVICE_ROLE_KEY!
+  },
+  openai: {
+    apiKey: process.env.OPENAI_API_KEY!,
+    model: process.env.OPENAI_MODEL || 'gpt-4'
+  },
+  grok: {
+    apiKey: process.env.GROK_API_KEY!,
+    baseUrl: process.env.GROK_BASE_URL || 'https://api.grok.ai/v1'
+  },
+  redis: {
+    url: process.env.UPSTASH_REDIS_REST_URL!,
+    token: process.env.UPSTASH_REDIS_REST_TOKEN!
+  },
+  app: {
+    environment: process.env.NODE_ENV || 'development',
+    logLevel: process.env.LOG_LEVEL || 'info',
+    corsOrigins: process.env.CORS_ORIGINS?.split(',') || ['http://localhost:3000']
+  }
+};
+
+// Validate required environment variables
+function validateConfig() {
+  const required = [
+    'NEXT_PUBLIC_SUPABASE_URL',
+    'NEXT_PUBLIC_SUPABASE_ANON_KEY',
+    'SUPABASE_SERVICE_ROLE_KEY',
+    'OPENAI_API_KEY',
+    'GROK_API_KEY'
+  ];
+
+  const missing = required.filter(key => !process.env[key]);
+  
+  if (missing.length > 0) {
+    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+  }
+}
+
+validateConfig();
+```
+
+### Testing Strategy
+Comprehensive testing ensures code quality and reliability across all backend components. The testing strategy includes unit tests, integration tests, and end-to-end API tests using modern testing frameworks.
+
+```typescript
+// /tests/api/tweets.test.ts
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { createMocks } from 'node-mocks-http';
+import { GET } from '@/app/api/tweets/inspiration/route';
+
+describe('/api/tweets/inspiration', () => {
+  beforeEach(() => {
+    // Setup test environment
+  });
+
+  afterEach(() => {
+    // Cleanup test data
+  });
+
+  it('should return tweets for authenticated user', async () => {
+    const { req } = createMocks({
+      method: 'GET',
+      url: '/api/tweets/inspiration?topic=AI%20Agent&limit=10',
+      headers: {
+        authorization: 'Bearer valid_jwt_token'
+      }
+    });
+
+    const response = await GET(req as any);
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data.tweets).toBeInstanceOf(Array);
+    expect(data.tweets.length).toBeLessThanOrEqual(10);
+    expect(data.pagination).toBeDefined();
+  });
+
+  it('should return 401 for unauthenticated requests', async () => {
+    const { req } = createMocks({
+      method: 'GET',
+      url: '/api/tweets/inspiration?topic=AI%20Agent'
+    });
+
+    const response = await GET(req as any);
+    
+    expect(response.status).toBe(401);
+  });
+
+  it('should validate required parameters', async () => {
+    const { req } = createMocks({
+      method: 'GET',
+      url: '/api/tweets/inspiration',
+      headers: {
+        authorization: 'Bearer valid_jwt_token'
+      }
+    });
+
+    const response = await GET(req as any);
+    
+    expect(response.status).toBe(400);
+  });
+});
+```
+
+### Performance Optimization
+Performance optimization strategies ensure the backend can handle high loads efficiently while maintaining low latency. Caching, database optimization, and efficient algorithms are key components of the performance strategy.
+
+**Database Optimization:**
+- Proper indexing on frequently queried columns
+- Connection pooling for efficient database connections
+- Query optimization and monitoring for slow queries
+- Read replicas for scaling read operations
+
+**Caching Strategy:**
+- Redis caching for frequently accessed data
+- CDN caching for static assets and API responses
+- Application-level caching for expensive computations
+- Cache invalidation strategies for data consistency
+
+**API Optimization:**
+- Response compression for reduced bandwidth usage
+- Pagination for large datasets
+- Efficient serialization and deserialization
+- Background processing for non-critical operations
+
+### Monitoring and Alerting
+Production monitoring provides real-time visibility into application health, performance, and usage patterns. Alerting systems notify the development team of critical issues before they impact users.
+
+```typescript
+// /lib/monitoring.ts
+import { Logger } from './logger';
+
+export class MetricsCollector {
+  private logger: Logger;
+
+  constructor() {
+    this.logger = new Logger({ service: 'metrics' });
+  }
+
+  recordAPICall(endpoint: string, method: string, statusCode: number, duration: number) {
+    this.logger.info('API call recorded', {
+      endpoint,
+      method,
+      statusCode,
+      duration,
+      type: 'api_call'
+    });
+
+    // Send to monitoring service (e.g., DataDog, New Relic)
+    if (process.env.NODE_ENV === 'production') {
+      // Implementation for production monitoring
+    }
+  }
+
+  recordError(error: Error, context: any) {
+    this.logger.error('Error recorded', error, {
+      context,
+      type: 'error'
+    });
+
+    // Send to error tracking service (e.g., Sentry)
+    if (process.env.NODE_ENV === 'production') {
+      // Implementation for error tracking
+    }
+  }
+
+  recordUserAction(userId: string, action: string, metadata?: any) {
+    this.logger.info('User action recorded', {
+      userId,
+      action,
+      metadata,
+      type: 'user_action'
+    });
+  }
+}
+
+export const metrics = new MetricsCollector();
+```
+
+This comprehensive backend structure provides a solid foundation for building a scalable, maintainable, and secure tweet inspiration tool. The architecture leverages modern serverless technologies while following industry best practices for API design, security, and performance optimization.
+

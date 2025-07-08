@@ -1,0 +1,547 @@
+# Tweet Inspiration Feature Specification
+
+## 1. Overview
+
+The Tweet Inspiration feature is the core functionality of our TweetWriter platform. It enables users to discover high-engagement tweets based on their selected topics and provides a seamless experience for content discovery and enhancement. This feature combines real-time tweet data retrieval, intelligent engagement scoring, and an intuitive user interface.
+
+## 2. User Journey & Flow
+
+### 2.1 Initial Onboarding Flow
+```
+Signup → Topic Selection Modal → Save Topics → Redirect to /dashboard/inspiration
+```
+
+### 2.2 Returning User Flow  
+```
+Login → /dashboard/inspiration (loads with saved topics)
+```
+
+### 2.3 Topic Management Flow
+```
+Settings Page → Edit Topics → Save → Auto-refresh inspiration feed
+```
+
+## 3. Technical Requirements
+
+### 3.1 Technology Stack
+- **Frontend**: Next.js 14 App Router, TypeScript, Tailwind CSS, Shadcn UI
+- **Backend**: Serverless functions (Vercel)
+- **Database**: Supabase PostgreSQL with Row Level Security
+- **APIs**: 
+  - **Primary**: Grok AI API (via MCP) for tweet data retrieval
+  - **Fallback**: Twitter API v2 (for backup/validation)
+- **Authentication**: Supabase Auth with JWT
+- **Caching**: Redis (Upstash) for API response caching
+- **State Management**: Zustand + React hooks
+
+### 3.2 API Integration Strategy
+
+#### 3.2.1 Grok AI API Implementation
+```typescript
+// Grok API Configuration
+interface GrokAPIConfig {
+  apiKey: string; // XAI_API_KEY
+  model: 'grok-3-mini-beta'; // Default model
+  baseUrl: string;
+}
+
+// Tweet Search Request
+interface GrokTweetSearchRequest {
+  topic: string;
+  maxResults: number; // Default: 20, Max: 50
+  timeRange: '24h' | '7d' | '30d'; // Default: 7d
+  engagementThreshold: number; // Minimum engagement score
+  excludeRetweets: boolean; // Default: true
+}
+```
+
+#### 3.2.2 Twitter API v2 Fallback
+```typescript
+// Twitter API v2 Configuration  
+interface TwitterAPIConfig {
+  bearerToken: string;
+  endpoints: {
+    recentSearch: '/2/tweets/search/recent';
+    historicSearch: '/2/tweets/search/all';
+  };
+  fields: {
+    tweetFields: 'public_metrics,created_at,author_id,context_annotations';
+    userFields: 'username,name,profile_image_url,verified';
+    expansions: 'author_id,attachments.media_keys';
+  };
+}
+```
+
+### 3.3 Engagement Scoring Algorithm
+
+#### 3.3.1 Engagement Score Formula
+```javascript
+// Primary engagement scoring (prioritizing impressions)
+const calculateEngagementScore = (metrics) => {
+  const weights = {
+    impressions: 0.4,     // Highest priority
+    likes: 0.25,
+    comments: 0.2,
+    retweets: 0.1,
+    quotes: 0.05
+  };
+  
+  return (
+    (metrics.impression_count || 0) * weights.impressions +
+    (metrics.like_count || 0) * weights.likes +
+    (metrics.reply_count || 0) * weights.comments +
+    (metrics.retweet_count || 0) * weights.retweets +
+    (metrics.quote_count || 0) * weights.quotes
+  );
+};
+
+// Normalize score based on follower count and recency
+const normalizeScore = (score, authorFollowers, tweetAge) => {
+  const followerNormalization = Math.log10(authorFollowers + 1);
+  const recencyBoost = Math.max(0, 1 - (tweetAge / (7 * 24 * 60 * 60 * 1000))); // 7-day decay
+  
+  return (score / followerNormalization) * (1 + recencyBoost * 0.3);
+};
+```
+
+## 4. Database Schema
+
+### 4.1 User Topics Management
+```sql
+-- Topics table
+CREATE TABLE public.topics (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  name VARCHAR(100) NOT NULL UNIQUE,
+  slug VARCHAR(100) NOT NULL UNIQUE,
+  description TEXT,
+  tweet_count INTEGER DEFAULT 0,
+  is_trending BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- User selected topics (max 5)
+CREATE TABLE public.user_topics (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  topic_id UUID REFERENCES public.topics(id) ON DELETE CASCADE,
+  selected_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  UNIQUE(user_id, topic_id)
+);
+
+-- Add constraint for max 5 topics per user
+CREATE OR REPLACE FUNCTION check_user_topic_limit()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF (SELECT COUNT(*) FROM user_topics WHERE user_id = NEW.user_id) >= 5 THEN
+    RAISE EXCEPTION 'User cannot select more than 5 topics';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER user_topic_limit_trigger
+  BEFORE INSERT ON user_topics
+  FOR EACH ROW
+  EXECUTE FUNCTION check_user_topic_limit();
+```
+
+### 4.2 Tweet Cache System
+```sql
+-- Tweet cache for performance optimization
+CREATE TABLE public.tweet_inspiration_cache (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  tweet_id VARCHAR(100) NOT NULL,
+  topic_slug VARCHAR(100) NOT NULL,
+  content TEXT NOT NULL,
+  author_data JSONB NOT NULL,
+  engagement_metrics JSONB NOT NULL,
+  engagement_score DECIMAL(10,2) NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  expires_at TIMESTAMP WITH TIME ZONE DEFAULT (NOW() + INTERVAL '2 hours'),
+  UNIQUE(tweet_id, topic_slug)
+);
+
+-- Indexes for performance
+CREATE INDEX idx_tweet_cache_topic_score ON public.tweet_inspiration_cache(topic_slug, engagement_score DESC);
+CREATE INDEX idx_tweet_cache_expires ON public.tweet_inspiration_cache(expires_at);
+```
+
+## 5. API Endpoints Specification
+
+### 5.1 Topic Management Endpoints
+
+#### POST /api/user/topics
+```typescript
+// Request Body
+interface TopicUpdateRequest {
+  topicIds: string[]; // Max 5 topic IDs
+}
+
+// Response
+interface TopicUpdateResponse {
+  success: boolean;
+  updatedTopics: Topic[];
+  message: string;
+}
+```
+
+#### GET /api/topics/suggestions
+```typescript
+// Response - Popular/trending topics
+interface TopicSuggestionsResponse {
+  topics: Array<{
+    id: string;
+    name: string;
+    description: string;
+    tweetCount: number;
+    trending: boolean;
+  }>;
+}
+```
+
+### 5.2 Tweet Inspiration Endpoints
+
+#### GET /api/inspiration/feed
+```typescript
+// Query Parameters
+interface InspirationFeedParams {
+  limit?: number;        // Default: 20, Max: 50
+  offset?: number;       // For pagination
+  refresh?: boolean;     // Force refresh from external API
+  timeRange?: '24h' | '7d' | '30d'; // Default: 7d
+}
+
+// Response
+interface InspirationFeedResponse {
+  tweets: TweetInspiration[];
+  pagination: {
+    total: number;
+    limit: number;
+    offset: number;
+    hasMore: boolean;
+  };
+  lastRefreshed: string;
+}
+
+interface TweetInspiration {
+  id: string;
+  content: string;
+  author: {
+    id: string;
+    username: string;
+    displayName: string;
+    profileImage: string;
+    verified: boolean;
+    followerCount: number;
+  };
+  metrics: {
+    likes: number;
+    retweets: number;
+    comments: number;
+    quotes: number;
+    impressions?: number;
+    engagementScore: number;
+  };
+  createdAt: string;
+  tweetUrl: string;
+  topic: string;
+  hasMedia: boolean;
+  mediaPreview?: string;
+}
+```
+
+#### POST /api/inspiration/refresh
+```typescript
+// Request Body
+interface RefreshRequest {
+  topics?: string[]; // Specific topics to refresh, default: all user topics
+}
+
+// Response
+interface RefreshResponse {
+  success: boolean;
+  newTweetsCount: number;
+  lastRefreshed: string;
+  message: string;
+}
+```
+
+## 6. Frontend Implementation
+
+### 6.1 Component Architecture
+
+#### 6.1.1 Page Layout (/dashboard/inspiration)
+```
+InspirationPage
+├── Header (with Refresh button)
+├── TopicIndicator (shows active topics)
+├── TweetFeed
+│   ├── TweetCard (repeating)
+│   ├── LoadingSkeletons
+│   └── PaginationControls
+└── EmptyState (when no tweets)
+```
+
+#### 6.1.2 Core Components
+
+**TweetCard Component**
+```typescript
+interface TweetCardProps {
+  tweet: TweetInspiration;
+  onEditClick: (tweetId: string) => void;
+}
+
+// Features:
+// - Twitter-like card design
+// - Engagement metrics display
+// - "Edit & tweet" button
+// - Author profile section
+// - Media preview (if available)
+// - Copy to clipboard action
+```
+
+**TopicSelector Component** (for onboarding/settings)
+```typescript
+interface TopicSelectorProps {
+  selectedTopics: string[];
+  maxTopics: number; // 5
+  onTopicsChange: (topics: string[]) => void;
+  availableTopics: Topic[];
+}
+
+// Features:
+// - Search/filter topics
+// - Popular suggestions
+// - Custom topic input
+// - Visual selection limit indicator
+```
+
+### 6.2 State Management
+
+#### 6.2.1 Zustand Store Structure
+```typescript
+interface InspirationStore {
+  // Data
+  tweets: TweetInspiration[];
+  userTopics: Topic[];
+  isLoading: boolean;
+  error: string | null;
+  lastRefreshed: Date | null;
+  
+  // Pagination
+  pagination: {
+    limit: number;
+    offset: number;
+    hasMore: boolean;
+    total: number;
+  };
+  
+  // Actions
+  loadTweets: (params?: InspirationFeedParams) => Promise<void>;
+  refreshFeed: (topics?: string[]) => Promise<void>;
+  updateUserTopics: (topicIds: string[]) => Promise<void>;
+  loadMoreTweets: () => Promise<void>;
+  
+  // Filters
+  timeRange: '24h' | '7d' | '30d';
+  setTimeRange: (range: '24h' | '7d' | '30d') => void;
+}
+```
+
+### 6.3 Custom Hooks
+
+#### 6.3.1 useInspiration Hook
+```typescript
+const useInspiration = () => {
+  const store = useInspirationStore();
+  
+  // Auto-refresh every 10 minutes when tab is active
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!document.hidden) {
+        store.refreshFeed();
+      }
+    }, 10 * 60 * 1000);
+    
+    return () => clearInterval(interval);
+  }, []);
+  
+  return {
+    tweets: store.tweets,
+    isLoading: store.isLoading,
+    error: store.error,
+    pagination: store.pagination,
+    lastRefreshed: store.lastRefreshed,
+    loadTweets: store.loadTweets,
+    refreshFeed: store.refreshFeed,
+    loadMore: store.loadMoreTweets,
+  };
+};
+```
+
+## 7. User Experience Specifications
+
+### 7.1 Loading States
+- **Initial Load**: Skeleton cards (5-6 cards)
+- **Refresh**: Spinner on refresh button + subtle overlay
+- **Load More**: Skeleton cards at bottom
+- **Error State**: Retry button with error message
+
+### 7.2 Performance Requirements
+- **Initial Feed Load**: < 2 seconds
+- **Refresh Operation**: < 3 seconds  
+- **Pagination**: < 1 second
+- **Cache Hit Response**: < 500ms
+
+### 7.3 Responsive Design
+- **Desktop**: 3-column tweet layout
+- **Tablet**: 2-column layout
+- **Mobile**: Single column, optimized for thumb navigation
+
+### 7.4 Real-time Features
+- **Auto-refresh**: Every 10 minutes when tab active
+- **Manual refresh**: Button with last updated timestamp
+- **Live engagement updates**: WebSocket for real-time metric updates (Phase 2)
+
+## 8. Caching Strategy
+
+### 8.1 Multi-level Caching
+```typescript
+// 1. Database Cache (2 hours)
+// 2. Redis Cache (30 minutes)  
+// 3. Browser Cache (5 minutes)
+
+const CACHE_DURATIONS = {
+  DATABASE: 2 * 60 * 60 * 1000,    // 2 hours
+  REDIS: 30 * 60 * 1000,          // 30 minutes
+  BROWSER: 5 * 60 * 1000,         // 5 minutes
+};
+```
+
+### 8.2 Cache Invalidation
+- **User topic change**: Immediate cache clear
+- **Manual refresh**: Force cache bypass
+- **Scheduled cleanup**: Remove expired entries every hour
+
+## 9. Error Handling & Fallbacks
+
+### 9.1 API Failure Handling
+```typescript
+// Primary: Grok API → Fallback: Twitter API v2 → Cache: Database
+const getTweetInspiration = async (topics: string[]) => {
+  try {
+    return await fetchFromGrokAPI(topics);
+  } catch (grokError) {
+    console.warn('Grok API failed, falling back to Twitter API');
+    try {
+      return await fetchFromTwitterAPI(topics);
+    } catch (twitterError) {
+      console.warn('Twitter API failed, using cached data');
+      return await fetchFromCache(topics);
+    }
+  }
+};
+```
+
+### 9.2 Rate Limiting
+```typescript
+// API Rate Limits
+const RATE_LIMITS = {
+  GROK_API: { requests: 100, window: 60 * 60 * 1000 },      // 100/hour
+  TWITTER_API: { requests: 300, window: 15 * 60 * 1000 },   // 300/15min
+  USER_REQUESTS: { requests: 50, window: 60 * 60 * 1000 },  // 50/hour per user
+};
+```
+
+## 10. Security & Privacy
+
+### 10.1 Data Protection
+- **API Keys**: Stored in Vercel environment variables
+- **User Data**: Protected by Supabase RLS policies
+- **Tweet Content**: Cached with attribution, respects rate limits
+- **GDPR Compliance**: User data deletion on account removal
+
+### 10.2 Content Filtering
+- **Offensive Content**: Filter out flagged tweets
+- **Spam Detection**: Engagement ratio analysis
+- **Bot Detection**: Author verification and follower analysis
+
+## 11. Analytics & Monitoring
+
+### 11.1 Key Metrics
+- **User Engagement**: Feed refresh rate, tweet interactions
+- **API Performance**: Response times, error rates, cache hit ratios
+- **Content Quality**: User feedback on tweet relevance
+- **Topic Popularity**: Most selected topics, trending analysis
+
+### 11.2 Monitoring Alerts
+- **API Downtime**: Immediate notification
+- **High Error Rate**: > 5% in 5-minute window
+- **Cache Miss Rate**: > 70% indicates API issues
+- **User Complaints**: Topic relevance feedback
+
+## 12. Testing Strategy
+
+### 12.1 Unit Tests
+- **API Integration**: Mock Grok/Twitter API responses
+- **Engagement Scoring**: Verify algorithm accuracy
+- **Caching Logic**: Test cache hit/miss scenarios
+- **Topic Management**: Validate 5-topic limit
+
+### 12.2 Integration Tests
+- **End-to-End User Flow**: Signup → Topic Selection → Feed Loading
+- **API Fallback**: Test Grok failure → Twitter fallback
+- **Performance**: Load testing with 1000+ concurrent users
+
+### 12.3 User Acceptance Testing
+- **Content Relevance**: Manual review of tweet quality
+- **UI/UX**: Usability testing with target users
+- **Mobile Experience**: Cross-device compatibility
+
+## 13. Implementation Phases
+
+### 13.1 Phase 1: Core Functionality (Week 1-2)
+- [ ] Topic selection UI and backend
+- [ ] Basic Grok API integration
+- [ ] Tweet feed display
+- [ ] User topic management
+
+### 13.2 Phase 2: Enhancement & Polish (Week 3-4)
+- [ ] Engagement scoring algorithm
+- [ ] Caching implementation
+- [ ] Twitter API fallback
+- [ ] Performance optimization
+
+### 13.3 Phase 3: Advanced Features (Week 5-6)
+- [ ] Real-time updates
+- [ ] Advanced filtering
+- [ ] Analytics dashboard
+- [ ] Mobile optimization
+
+## 14. Success Criteria
+
+### 14.1 Technical KPIs
+- **Page Load Time**: < 2 seconds (95th percentile)
+- **API Success Rate**: > 99.5%
+- **Cache Hit Rate**: > 80%
+- **Error Rate**: < 1%
+
+### 14.2 User Experience KPIs
+- **User Retention**: > 70% day-7 retention
+- **Session Duration**: > 5 minutes average
+- **Tweet Engagement**: > 3 tweets viewed per session
+- **Topic Satisfaction**: > 4.5/5 average rating
+
+### 14.3 Business KPIs
+- **Feature Adoption**: > 90% of users complete topic selection
+- **Daily Active Usage**: > 60% of users visit daily
+- **Content Quality Score**: > 4.0/5 from user feedback
+- **API Cost Efficiency**: < $0.10 per user per month
+
+---
+
+*This specification serves as the comprehensive blueprint for implementing the Tweet Inspiration feature, ensuring alignment between product requirements, technical implementation, and user experience expectations.*
+description:
+globs:
+alwaysApply: false
+---
